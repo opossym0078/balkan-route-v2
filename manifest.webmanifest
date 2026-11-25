@@ -1,0 +1,29 @@
+{
+  "name": "Балканы на машине · 2–24 октября 2026",
+  "short_name": "Балканы",
+  "description": "Сербия, Босния и Герцеговина, Черногория: 9 баз, 23 дня, ≈2650 км",
+  "lang": "ru",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#efebe8",
+  "theme_color": "#d0603f",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

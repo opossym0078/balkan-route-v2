@@ -1,0 +1,403 @@
+# Сборка Android-приложения «Балканы» и деплой на GitHub Pages.
+name: Android APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Подготовить ключ подписи APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASS }}
+        run: |
+          set -e
+          KS_PASS="${KEYSTORE_PASS:-balkroute2026}"
+          K_ALIAS="${KEY_ALIAS:-balkan}"
+          K_PASS="${KEY_PASS:-$KS_PASS}"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > balkan.keystore
+          else
+            echo "::notice::Секрет KEYSTORE_BASE64 не задан — генерирую ключ на лету. Для обновлений поверх установленного APK сохраните постоянный keystore в Secrets."
+            keytool -genkeypair -v -keystore balkan.keystore -storetype PKCS12 \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -alias "$K_ALIAS" -storepass "$KS_PASS" -keypass "$K_PASS" \
+              -dname "CN=Balkan Route, OU=Travel, O=Personal, L=Belgrade, C=RS"
+          fi
+          echo "KS_PASS=$KS_PASS" >> "$GITHUB_ENV"
+          echo "K_ALIAS=$K_ALIAS" >> "$GITHUB_ENV"
+          echo "K_PASS=$K_PASS" >> "$GITHUB_ENV"
+
+      - name: Создать Android-проект
+        run: |
+          set -e
+          if [ ! -f index.html ]; then
+            Z=$(find . -name '*.zip' -not -path './.git/*' | head -1)
+            if [ -n "$Z" ]; then unzip -o -j "$Z" -d . ; fi
+          fi
+          if [ ! -f index.html ]; then echo "::error::Не нашёл index.html"; ls -la; exit 1; fi
+          mkdir -p _site && cp index.html sw.js manifest.webmanifest icon-*.png _site/
+          if [ -f m3fx.js ]; then cp m3fx.js _site/; fi
+          A=android/app/src/main
+          mkdir -p $A/java/eu/route/balkan $A/assets/www $A/res/values $A/res/values-night $A/res/mipmap-xxxhdpi
+          cp index.html sw.js manifest.webmanifest icon-*.png $A/assets/www/
+          if [ -f m3fx.js ]; then cp m3fx.js $A/assets/www/; fi
+          cp icon-192.png $A/res/mipmap-xxxhdpi/ic_launcher.png
+
+          cat > android/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = 'BalkanRoute'
+          include ':app'
+          EOF
+
+          cat > android/build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF
+
+          cat > android/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=true
+          EOF
+
+          cat > android/app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          def vc = (System.getenv('VC') ?: '1') as Integer
+          android {
+              namespace 'eu.route.balkan'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'eu.route.balkan'
+                  minSdk 27
+                  targetSdk 34
+                  versionCode vc
+                  versionName "2.${vc}"
+              }
+              signingConfigs {
+                  rel {
+                      storeFile file(System.getenv('KS'))
+                      storePassword System.getenv('KS_PASS')
+                      keyAlias System.getenv('K_ALIAS')
+                      keyPassword System.getenv('K_PASS')
+                  }
+              }
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      signingConfig signingConfigs.rel
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              lint {
+                  checkReleaseBuilds false
+                  abortOnError false
+              }
+          }
+          EOF
+
+          cat > $A/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <application
+                  android:label="Балканы"
+                  android:icon="@mipmap/ic_launcher"
+                  android:theme="@style/AppTheme"
+                  android:allowBackup="true"
+                  android:supportsRtl="false">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > $A/res/values/themes.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
+                  <item name="android:windowBackground">@android:color/white</item>
+                  <item name="android:colorAccent">#D0603F</item>
+                  <item name="android:statusBarColor">@android:color/transparent</item>
+                  <item name="android:navigationBarColor">#EFEBE8</item>
+                  <item name="android:windowLightStatusBar">true</item>
+                  <item name="android:windowLightNavigationBar">true</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > $A/res/values-night/themes.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+                  <item name="android:windowBackground">@android:color/black</item>
+                  <item name="android:colorAccent">#D0603F</item>
+                  <item name="android:statusBarColor">@android:color/transparent</item>
+                  <item name="android:navigationBarColor">#1C1917</item>
+                  <item name="android:windowLightStatusBar">false</item>
+                  <item name="android:windowLightNavigationBar">false</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > $A/java/eu/route/balkan/MainActivity.java <<'EOF'
+          package eu.route.balkan;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.content.res.Configuration;
+          import android.view.HapticFeedbackConstants;
+          import android.view.View;
+          import android.webkit.JavascriptInterface;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.webkit.GeolocationPermissions;
+          import android.webkit.ServiceWorkerClient;
+          import android.webkit.ServiceWorkerController;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebResourceResponse;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import java.io.ByteArrayInputStream;
+          import java.io.IOException;
+          import java.io.InputStream;
+          import java.util.HashMap;
+          import java.util.Map;
+
+          public class MainActivity extends Activity {
+              static final String HOST = "appassets.androidplatform.net";
+              static final String START = "https://" + HOST + "/index.html";
+              WebView wv;
+              GeolocationPermissions.Callback geoCb;
+              String geoOrigin;
+              volatile int satDp = 24;
+
+              void bars(boolean dark) {
+                  int f = View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN;
+                  if (!dark) f |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                  getWindow().getDecorView().setSystemUiVisibility(f);
+                  getWindow().setStatusBarColor(0x00000000);
+                  getWindow().setNavigationBarColor(dark ? 0xFF1C1917 : 0xFFEFEBE8);
+              }
+
+              public class Bridge {
+                  @JavascriptInterface public int insetTop() { return satDp; }
+                  @JavascriptInterface public void setDark(final boolean d) { runOnUiThread(() -> bars(d)); }
+                  @JavascriptInterface public void haptic() {
+                      runOnUiThread(() -> wv.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP));
+                  }
+              }
+
+              static String mime(String p) {
+                  if (p.endsWith(".html")) return "text/html";
+                  if (p.endsWith(".js")) return "application/javascript";
+                  if (p.endsWith(".webmanifest")) return "application/manifest+json";
+                  if (p.endsWith(".json")) return "application/json";
+                  if (p.endsWith(".css")) return "text/css";
+                  if (p.endsWith(".png")) return "image/png";
+                  if (p.endsWith(".svg")) return "image/svg+xml";
+                  return "application/octet-stream";
+              }
+
+              WebResourceResponse asset(Uri u) {
+                  if (u == null || !HOST.equals(u.getHost())) return null;
+                  String p = u.getPath();
+                  if (p == null || p.length() <= 1) p = "/index.html";
+                  p = p.substring(1);
+                  Map<String, String> h = new HashMap<>();
+                  h.put("Cache-Control", "no-cache");
+                  h.put("Access-Control-Allow-Origin", "*");
+                  try {
+                      InputStream in = getAssets().open("www/" + p);
+                      String m = mime(p);
+                      String enc = (m.startsWith("text/") || m.contains("javascript") || m.contains("json")) ? "utf-8" : null;
+                      return new WebResourceResponse(m, enc, 200, "OK", h, in);
+                  } catch (IOException e) {
+                      return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found", h, new ByteArrayInputStream(new byte[0]));
+                  }
+              }
+
+              void openOutside(Uri u) {
+                  try {
+                      Intent i;
+                      if ("intent".equals(u.getScheme())) i = Intent.parseUri(u.toString(), Intent.URI_INTENT_SCHEME);
+                      else i = new Intent(Intent.ACTION_VIEW, u);
+                      i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                      startActivity(i);
+                  } catch (Exception e) {
+                      // no matching app
+                  }
+              }
+
+              @Override
+              protected void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  wv = new WebView(this);
+                  setContentView(wv);
+                  boolean night = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+                  bars(night);
+                  wv.setOnApplyWindowInsetsListener((v, ins) -> {
+                      int dp = Math.round(ins.getSystemWindowInsetTop() / getResources().getDisplayMetrics().density);
+                      if (dp != satDp) {
+                          satDp = dp;
+                          wv.evaluateJavascript("try{document.documentElement.style.setProperty('--sat','" + dp + "px');dispatchEvent(new Event('resize'))}catch(e){}", null);
+                      }
+                      return v.onApplyWindowInsets(ins);
+                  });
+                  wv.addJavascriptInterface(new Bridge(), "BALKApp");
+                  WebSettings s = wv.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setGeolocationEnabled(true);
+                  s.setSupportMultipleWindows(false);
+                  s.setAllowFileAccess(false);
+                  s.setAllowContentAccess(false);
+                  s.setUserAgentString(s.getUserAgentString() + " BALKApp");
+
+                  ServiceWorkerController.getInstance().setServiceWorkerClient(new ServiceWorkerClient() {
+                      @Override
+                      public WebResourceResponse shouldInterceptRequest(WebResourceRequest r) {
+                          return asset(r.getUrl());
+                      }
+                  });
+
+                  wv.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
+                          return asset(r.getUrl());
+                      }
+
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                          Uri u = r.getUrl();
+                          if (HOST.equals(u.getHost())) return false;
+                          openOutside(u);
+                          return true;
+                      }
+                  });
+
+                  wv.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback cb) {
+                          if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                                  || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                              cb.invoke(origin, true, false);
+                          } else {
+                              geoCb = cb;
+                              geoOrigin = origin;
+                              requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, 1);
+                          }
+                      }
+                  });
+
+                  if (state != null) wv.restoreState(state);
+                  if (wv.getUrl() == null) wv.loadUrl(START);
+              }
+
+              @Override
+              public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
+                  boolean ok = false;
+                  for (int r : res) if (r == PackageManager.PERMISSION_GRANTED) ok = true;
+                  if (geoCb != null) geoCb.invoke(geoOrigin, ok, false);
+                  geoCb = null;
+              }
+
+              @Override
+              protected void onSaveInstanceState(Bundle out) {
+                  super.onSaveInstanceState(out);
+                  wv.saveState(out);
+              }
+
+              @Override
+              public void onBackPressed() {
+                  wv.evaluateJavascript(
+                      "(function(){try{if(document.querySelector('#sheet.on')){closeSheet();return 1}" +
+                      "if(document.querySelector('#pop.on')){closePop();return 1}}catch(e){}return 0})()",
+                      v -> { if (!"1".equals(v)) finish(); });
+              }
+
+              @Override
+              protected void onPause() { super.onPause(); wv.onPause(); }
+
+              @Override
+              protected void onResume() { super.onResume(); wv.onResume(); }
+          }
+          EOF
+
+      - name: Собрать APK
+        working-directory: android
+        env:
+          VC: ${{ github.run_number }}
+          KS: ${{ github.workspace }}/balkan.keystore
+        run: gradle assembleRelease --no-daemon
+
+      - name: Выложить APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk Balkans.apk
+          gh release create "v${{ github.run_number }}" Balkans.apk -R "${{ github.repository }}" \
+            --title "Балканы · сборка ${{ github.run_number }}" --notes "Установите Balkans.apk на телефон." --latest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Balkans-apk
+          path: Balkans.apk
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  pages:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.dep.outputs.page_url }}
+    steps:
+      - id: dep
+        uses: actions/deploy-pages@v4
