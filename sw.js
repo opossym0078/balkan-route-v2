@@ -1,13 +1,15 @@
-// Балканы · офлайн-режим
-const V='balk-shell-v1',RT='tiles-rt',PRE='tiles-pre',MAX=7500;
+// Балканы · офлайн-режим v2
+const V='balk-shell-v2',RT='tiles-rt',PRE='tiles-pre',MAX=7500;
 const SHELL=['./','./index.html','./manifest.webmanifest','./icon-192.png','./icon-512.png','./icon-180.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(V).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k.startsWith('balk-shell')&&k!==V).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
 const tileKey=u=>{
-  if(/arcgisonline\.com$/.test(u.hostname)){const m=u.pathname.match(/\/tile\/(\d+)\/(\d+)\/(\d+)/);return m?{st:'esri',z:m[1],x:m[3],y:m[2],id:`https://t.local/esri/${m[1]}/${m[3]}/${m[2]}`}:null}
+  const h=u.hostname;
+  if(/arcgisonline\.com$/.test(h)){const m=u.pathname.match(/\/tile\/(\d+)\/(\d+)\/(\d+)/);const st=/Imagery/.test(u.pathname)?'sat':/Topo/.test(u.pathname)?'etopo':'esri';return m?{st,z:m[1],x:m[3],y:m[2],id:`https://t.local/${st}/${m[1]}/${m[3]}/${m[2]}`}:null}
   let st=null;
-  if(/(^|\.)tile\.openstreetmap\.org$/.test(u.hostname))st='osm';
-  else if(/basemaps\.cartocdn\.com$/.test(u.hostname))st=/dark_all/.test(u.pathname)?'dark':'voy';
+  if(/tile\.opentopomap\.org$/.test(h))st='topo';
+  else if(/tile\.openstreetmap\.fr$/.test(h))st='osmfr';
+  else if(/(^|\.)tile\.openstreetmap\.org$/.test(h))st='osm';
   if(!st)return null;
   const m=u.pathname.match(/\/(\d+)\/(\d+)\/(\d+)(?:@2x)?\.png$/);
   return m?{st,z:m[1],x:m[2],y:m[3],id:`https://t.local/${st}/${m[1]}/${m[2]}/${m[3]}`}:null;
@@ -27,7 +29,7 @@ async function tile(e,k){
   }).catch(()=>null);
   if(hit){e.waitUntil(net);return hit}
   const r=await net;if(r)return r;
-  const alt=['osm','voy','dark'].filter(s=>s!==k.st);
+  const alt=['osm','osmfr','etopo','topo','sat'].filter(s=>s!==k.st);
   for(const s of alt){const id=`https://t.local/${s}/${k.z}/${k.x}/${k.y}`;const h=await pre.match(id)||await rt.match(id);if(h)return h}
   return Response.error();
 }

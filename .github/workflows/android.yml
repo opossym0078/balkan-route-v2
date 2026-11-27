@@ -154,7 +154,7 @@ jobs:
           <resources>
               <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
                   <item name="android:windowBackground">@android:color/white</item>
-                  <item name="android:colorAccent">#D0603F</item>
+                  <item name="android:colorAccent">#D05532</item>
                   <item name="android:statusBarColor">@android:color/transparent</item>
                   <item name="android:navigationBarColor">#EFEBE8</item>
                   <item name="android:windowLightStatusBar">true</item>
@@ -168,7 +168,7 @@ jobs:
           <resources>
               <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
                   <item name="android:windowBackground">@android:color/black</item>
-                  <item name="android:colorAccent">#D0603F</item>
+                  <item name="android:colorAccent">#EB7D5C</item>
                   <item name="android:statusBarColor">@android:color/transparent</item>
                   <item name="android:navigationBarColor">#1C1917</item>
                   <item name="android:windowLightStatusBar">false</item>
@@ -185,12 +185,12 @@ jobs:
           import android.content.Intent;
           import android.content.pm.PackageManager;
           import android.content.res.Configuration;
-          import android.view.HapticFeedbackConstants;
-          import android.view.View;
-          import android.webkit.JavascriptInterface;
           import android.net.Uri;
           import android.os.Bundle;
+          import android.view.HapticFeedbackConstants;
+          import android.view.View;
           import android.webkit.GeolocationPermissions;
+          import android.webkit.JavascriptInterface;
           import android.webkit.ServiceWorkerClient;
           import android.webkit.ServiceWorkerController;
           import android.webkit.WebChromeClient;
@@ -200,15 +200,27 @@ jobs:
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
           import java.io.ByteArrayInputStream;
+          import java.io.ByteArrayOutputStream;
+          import java.io.File;
+          import java.io.FileInputStream;
+          import java.io.FileOutputStream;
           import java.io.IOException;
           import java.io.InputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
           import java.util.HashMap;
           import java.util.Map;
+          import java.util.regex.Matcher;
+          import java.util.regex.Pattern;
 
           public class MainActivity extends Activity {
               static final String HOST = "appassets.androidplatform.net";
               static final String START = "https://" + HOST + "/index.html";
+              static final String TILE_UA = "BalkanRoute/2.1 (Android; personal trip map)";
+              static final Pattern TILE_PNG = Pattern.compile("/(\\d+)/(\\d+)/(\\d+)(?:@2x)?\\.png$");
+              static final Pattern TILE_ESRI = Pattern.compile("/tile/(\\d+)/(\\d+)/(\\d+)$");
               WebView wv;
+              File tileDir;
               GeolocationPermissions.Callback geoCb;
               String geoOrigin;
               volatile int satDp = 24;
@@ -240,8 +252,91 @@ jobs:
                   return "application/octet-stream";
               }
 
+              static byte[] readAll(InputStream in) throws IOException {
+                  ByteArrayOutputStream out = new ByteArrayOutputStream();
+                  byte[] buf = new byte[8192];
+                  int n;
+                  while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
+                  return out.toByteArray();
+              }
+
+              static boolean isTileHost(String host) {
+                  if (host == null) return false;
+                  return host.endsWith("tile.openstreetmap.org")
+                      || host.endsWith("tile.openstreetmap.fr")
+                      || host.endsWith("tile.opentopomap.org")
+                      || host.endsWith("arcgisonline.com");
+              }
+
+              WebResourceResponse handleTile(Uri u) {
+                  String host = u.getHost();
+                  String path = u.getPath();
+                  if (host == null || path == null) return null;
+                  String st = null, z = null, x = null, y = null, contentType = "image/png";
+                  if (host.endsWith("arcgisonline.com")) {
+                      Matcher m = TILE_ESRI.matcher(path);
+                      if (!m.find()) return null;
+                      st = path.contains("Imagery") ? "sat" : (path.contains("Topo") ? "etopo" : "esri");
+                      z = m.group(1); y = m.group(2); x = m.group(3);
+                      contentType = "image/jpeg";
+                  } else {
+                      Matcher m = TILE_PNG.matcher(path);
+                      if (!m.find()) return null;
+                      if (host.endsWith("tile.opentopomap.org")) st = "topo";
+                      else if (host.endsWith("tile.openstreetmap.fr")) st = "osmfr";
+                      else st = "osm";
+                      z = m.group(1); x = m.group(2); y = m.group(3);
+                  }
+                  Map<String, String> cors = new HashMap<>();
+                  cors.put("Access-Control-Allow-Origin", "*");
+                  cors.put("Cache-Control", "public, max-age=2592000");
+
+                  File f = new File(tileDir, st + "/" + z + "/" + x + "/" + y + ".tile");
+                  if (f.exists() && f.length() > 100) {
+                      try (FileInputStream fis = new FileInputStream(f)) {
+                          return new WebResourceResponse(contentType, null, 200, "OK", cors, new ByteArrayInputStream(readAll(fis)));
+                      } catch (IOException ignored) {}
+                  }
+                  HttpURLConnection c = null;
+                  try {
+                      c = (HttpURLConnection) new URL(u.toString()).openConnection();
+                      c.setConnectTimeout(8000);
+                      c.setReadTimeout(12000);
+                      c.setInstanceFollowRedirects(true);
+                      c.setRequestProperty("User-Agent", TILE_UA);
+                      c.setRequestProperty("Accept", "image/png,image/jpeg,image/*;q=0.8");
+                      int code = c.getResponseCode();
+                      if (code == 200) {
+                          String ct = c.getContentType();
+                          if (ct != null && ct.contains(";")) ct = ct.substring(0, ct.indexOf(';')).trim();
+                          if (ct == null || ct.isEmpty()) ct = contentType;
+                          byte[] bytes;
+                          try (InputStream is = c.getInputStream()) { bytes = readAll(is); }
+                          if (bytes.length > 100) {
+                              File parent = f.getParentFile();
+                              if (parent != null) parent.mkdirs();
+                              try (FileOutputStream fos = new FileOutputStream(f)) { fos.write(bytes); } catch (IOException ignored) {}
+                          }
+                          return new WebResourceResponse(ct, null, 200, "OK", cors, new ByteArrayInputStream(bytes));
+                      }
+                      return new WebResourceResponse("image/png", null, code, "ERR", cors, new ByteArrayInputStream(new byte[0]));
+                  } catch (Exception e) {
+                      return new WebResourceResponse("image/png", null, 504, "Offline", cors, new ByteArrayInputStream(new byte[0]));
+                  } finally {
+                      if (c != null) c.disconnect();
+                  }
+              }
+
+              WebResourceResponse intercept(WebResourceRequest r) {
+                  Uri u = r.getUrl();
+                  if (u == null) return null;
+                  String host = u.getHost();
+                  if (HOST.equals(host)) return asset(u);
+                  if ("GET".equals(r.getMethod()) && isTileHost(host)) return handleTile(u);
+                  return null;
+              }
+
               WebResourceResponse asset(Uri u) {
-                  if (u == null || !HOST.equals(u.getHost())) return null;
                   String p = u.getPath();
                   if (p == null || p.length() <= 1) p = "/index.html";
                   p = p.substring(1);
@@ -265,14 +360,14 @@ jobs:
                       else i = new Intent(Intent.ACTION_VIEW, u);
                       i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                       startActivity(i);
-                  } catch (Exception e) {
-                      // no matching app
-                  }
+                  } catch (Exception ignored) {}
               }
 
               @Override
               protected void onCreate(Bundle state) {
                   super.onCreate(state);
+                  tileDir = new File(getFilesDir(), "tiles");
+                  tileDir.mkdirs();
                   wv = new WebView(this);
                   setContentView(wv);
                   boolean night = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
@@ -293,19 +388,20 @@ jobs:
                   s.setSupportMultipleWindows(false);
                   s.setAllowFileAccess(false);
                   s.setAllowContentAccess(false);
+                  s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
                   s.setUserAgentString(s.getUserAgentString() + " BALKApp");
 
                   ServiceWorkerController.getInstance().setServiceWorkerClient(new ServiceWorkerClient() {
                       @Override
                       public WebResourceResponse shouldInterceptRequest(WebResourceRequest r) {
-                          return asset(r.getUrl());
+                          return intercept(r);
                       }
                   });
 
                   wv.setWebViewClient(new WebViewClient() {
                       @Override
                       public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
-                          return asset(r.getUrl());
+                          return intercept(r);
                       }
 
                       @Override
