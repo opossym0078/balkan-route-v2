@@ -59,10 +59,18 @@ jobs:
           mkdir -p _site && cp index.html sw.js manifest.webmanifest icon-*.png _site/
           if [ -f m3fx.js ]; then cp m3fx.js _site/; fi
           A=android/app/src/main
-          mkdir -p $A/java/eu/route/balkan $A/assets/www $A/res/values $A/res/values-night $A/res/mipmap-xxxhdpi
+          mkdir -p $A/java/eu/route/balkan $A/assets/www $A/res/values $A/res/values-night $A/res/mipmap-xxxhdpi $A/res/mipmap-anydpi-v26
           cp index.html sw.js manifest.webmanifest icon-*.png $A/assets/www/
           if [ -f m3fx.js ]; then cp m3fx.js $A/assets/www/; fi
-          cp icon-192.png $A/res/mipmap-xxxhdpi/ic_launcher.png
+          cp icon-512.png $A/res/mipmap-xxxhdpi/ic_launcher.png
+          cp icon-512.png $A/res/mipmap-xxxhdpi/ic_launcher_bg.png
+          cat > $A/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@mipmap/ic_launcher_bg"/>
+              <foreground android:drawable="@android:color/transparent"/>
+          </adaptive-icon>
+          EOF
 
           cat > android/settings.gradle <<'EOF'
           pluginManagement {
@@ -130,7 +138,7 @@ jobs:
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
               <application
-                  android:label="Балканы"
+                  android:label="Balkans"
                   android:icon="@mipmap/ic_launcher"
                   android:theme="@style/AppTheme"
                   android:allowBackup="true"
